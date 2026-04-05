@@ -1,0 +1,247 @@
+import type {
+  Project,
+  Neighbor,
+  ProjectSummary,
+  GrunnbokEntry,
+  MatrikkelUnit,
+} from './types';
+
+// ============================================================
+// Mock data – used when Supabase is not configured
+// ============================================================
+
+const NOW = new Date().toISOString();
+
+export const MOCK_PROJECTS: Project[] = [
+  {
+    id: '1',
+    user_id: 'mock-user',
+    name: 'Tilbygg Storgata 12',
+    description: 'Nabovarsel for tilbygg på 40m² i Storgata 12, Oslo',
+    kommune_nr: '0301',
+    kommune_navn: 'Oslo',
+    gnr: 45,
+    bnr: 120,
+    address: 'Storgata 12, 0155 Oslo',
+    status: 'sent',
+    deadline: '2026-05-01',
+    created_at: '2026-03-20T10:00:00Z',
+    updated_at: NOW,
+  },
+  {
+    id: '2',
+    user_id: 'mock-user',
+    name: 'Garasje Lilleveien 3',
+    description: 'Nabovarsel for ny garasje, Bergen',
+    kommune_nr: '4601',
+    kommune_navn: 'Bergen',
+    gnr: 12,
+    bnr: 55,
+    address: 'Lilleveien 3, 5003 Bergen',
+    status: 'draft',
+    deadline: '2026-06-15',
+    created_at: '2026-04-01T08:00:00Z',
+    updated_at: NOW,
+  },
+  {
+    id: '3',
+    user_id: 'mock-user',
+    name: 'Fradeling Fjordvegen 8',
+    description: 'Nabovarsel ifm tomteutskilling, Tromsø',
+    kommune_nr: '5401',
+    kommune_navn: 'Tromsø',
+    gnr: 100,
+    bnr: 8,
+    address: 'Fjordvegen 8, 9020 Tromsø',
+    status: 'ready',
+    created_at: '2026-04-03T12:00:00Z',
+    updated_at: NOW,
+  },
+];
+
+export const MOCK_NEIGHBORS: Neighbor[] = [
+  // Project 1 neighbors
+  {
+    id: 'n1',
+    project_id: '1',
+    gnr: 45,
+    bnr: 121,
+    kommune_nr: '0301',
+    address: 'Storgata 14, 0155 Oslo',
+    owner_name: 'Kari Nordmann',
+    owner_type: 'person',
+    relation_type: 'neighbor',
+    distance_meters: 5,
+    notification_status: 'responded',
+    notification_sent_at: '2026-03-22T10:00:00Z',
+    notification_method: 'altinn',
+    response_deadline: '2026-04-05',
+    response_received_at: '2026-03-28T14:00:00Z',
+    response_type: 'no_protest',
+    source: 'grunnbok',
+    created_at: '2026-03-20T10:00:00Z',
+    updated_at: NOW,
+  },
+  {
+    id: 'n2',
+    project_id: '1',
+    gnr: 45,
+    bnr: 119,
+    kommune_nr: '0301',
+    address: 'Storgata 10, 0155 Oslo',
+    owner_name: 'Eiendom AS',
+    owner_type: 'company',
+    org_number: '912345678',
+    relation_type: 'neighbor',
+    distance_meters: 3,
+    notification_status: 'protested',
+    notification_sent_at: '2026-03-22T10:00:00Z',
+    notification_method: 'altinn',
+    response_deadline: '2026-04-05',
+    response_received_at: '2026-04-01T09:00:00Z',
+    response_type: 'protest',
+    response_text: 'Bekymret for innsyn fra tilbygget mot vår eiendom.',
+    source: 'grunnbok',
+    created_at: '2026-03-20T10:00:00Z',
+    updated_at: NOW,
+  },
+  {
+    id: 'n3',
+    project_id: '1',
+    gnr: 45,
+    bnr: 122,
+    kommune_nr: '0301',
+    address: 'Bakgata 2, 0155 Oslo',
+    owner_name: 'Ole Hansen',
+    owner_type: 'person',
+    relation_type: 'gjenboer',
+    distance_meters: 15,
+    notification_status: 'sent',
+    notification_sent_at: '2026-03-22T10:00:00Z',
+    notification_method: 'altinn',
+    response_deadline: '2026-04-05',
+    source: 'grunnbok',
+    created_at: '2026-03-20T10:00:00Z',
+    updated_at: NOW,
+  },
+  {
+    id: 'n4',
+    project_id: '1',
+    gnr: 45,
+    bnr: 118,
+    kommune_nr: '0301',
+    address: 'Storgata 8, 0155 Oslo',
+    owner_name: 'Oslo kommune',
+    owner_type: 'municipality',
+    relation_type: 'adjacent',
+    notification_status: 'delivered',
+    notification_sent_at: '2026-03-22T10:00:00Z',
+    notification_method: 'altinn',
+    response_deadline: '2026-04-05',
+    source: 'matrikkel',
+    created_at: '2026-03-20T10:00:00Z',
+    updated_at: NOW,
+  },
+  // Project 2 neighbors
+  {
+    id: 'n5',
+    project_id: '2',
+    gnr: 12,
+    bnr: 56,
+    kommune_nr: '4601',
+    address: 'Lilleveien 5, 5003 Bergen',
+    owner_name: 'Per Bergensen',
+    owner_type: 'person',
+    relation_type: 'neighbor',
+    distance_meters: 4,
+    notification_status: 'pending',
+    source: 'grunnbok',
+    created_at: '2026-04-01T08:00:00Z',
+    updated_at: NOW,
+  },
+  {
+    id: 'n6',
+    project_id: '2',
+    gnr: 12,
+    bnr: 54,
+    kommune_nr: '4601',
+    address: 'Lilleveien 1, 5003 Bergen',
+    owner_name: 'Lise Fjell',
+    owner_type: 'person',
+    relation_type: 'neighbor',
+    distance_meters: 8,
+    notification_status: 'pending',
+    source: 'grunnbok',
+    created_at: '2026-04-01T08:00:00Z',
+    updated_at: NOW,
+  },
+  // Project 3 neighbors
+  {
+    id: 'n7',
+    project_id: '3',
+    gnr: 100,
+    bnr: 9,
+    kommune_nr: '5401',
+    address: 'Fjordvegen 10, 9020 Tromsø',
+    owner_name: 'Tromsø Bolig AS',
+    owner_type: 'company',
+    org_number: '987654321',
+    relation_type: 'neighbor',
+    distance_meters: 12,
+    notification_status: 'pending',
+    source: 'matrikkel',
+    created_at: '2026-04-03T12:00:00Z',
+    updated_at: NOW,
+  },
+  {
+    id: 'n8',
+    project_id: '3',
+    gnr: 100,
+    bnr: 7,
+    kommune_nr: '5401',
+    address: 'Fjordvegen 6, 9020 Tromsø',
+    owner_name: 'Anna Nordlys',
+    owner_type: 'person',
+    relation_type: 'neighbor',
+    distance_meters: 6,
+    notification_status: 'pending',
+    source: 'grunnbok',
+    created_at: '2026-04-03T12:00:00Z',
+    updated_at: NOW,
+  },
+];
+
+export const MOCK_GRUNNBOK_ENTRIES: GrunnbokEntry[] = [
+  {
+    matrikkel_unit: { kommune_nr: '0301', gnr: 45, bnr: 121, address: 'Storgata 14' },
+    owners: [{ name: 'Kari Nordmann', type: 'person', share: '1/1', address: 'Storgata 14, 0155 Oslo' }],
+  },
+  {
+    matrikkel_unit: { kommune_nr: '0301', gnr: 45, bnr: 119, address: 'Storgata 10' },
+    owners: [{ name: 'Eiendom AS', type: 'company', org_number: '912345678', address: 'Storgata 10, 0155 Oslo' }],
+  },
+];
+
+export const MOCK_MATRIKKEL_NEIGHBORS: MatrikkelUnit[] = [
+  { kommune_nr: '0301', gnr: 45, bnr: 121, address: 'Storgata 14', coordinates: { lat: 59.914, lng: 10.752 } },
+  { kommune_nr: '0301', gnr: 45, bnr: 119, address: 'Storgata 10', coordinates: { lat: 59.913, lng: 10.751 } },
+  { kommune_nr: '0301', gnr: 45, bnr: 122, address: 'Bakgata 2', coordinates: { lat: 59.915, lng: 10.753 } },
+  { kommune_nr: '0301', gnr: 45, bnr: 118, address: 'Storgata 8', coordinates: { lat: 59.912, lng: 10.750 } },
+];
+
+export function getMockProjectSummaries(): ProjectSummary[] {
+  return MOCK_PROJECTS.map((p) => {
+    const neighbors = MOCK_NEIGHBORS.filter((n) => n.project_id === p.id);
+    return {
+      ...p,
+      neighbor_count: neighbors.length,
+      sent_count: neighbors.filter((n) =>
+        ['sent', 'delivered', 'read', 'responded', 'protested', 'no_response'].includes(n.notification_status)
+      ).length,
+      responded_count: neighbors.filter((n) =>
+        ['responded', 'protested', 'no_response'].includes(n.notification_status)
+      ).length,
+      protested_count: neighbors.filter((n) => n.notification_status === 'protested').length,
+    };
+  });
+}
