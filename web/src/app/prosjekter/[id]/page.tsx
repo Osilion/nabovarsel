@@ -18,9 +18,11 @@ import {
   MoreVertical,
   Building2,
   User,
+  MapPin,
 } from 'lucide-react';
 import { useStore } from '@/lib/store';
 import { SectionCard, StatusBadge, InfoRow, ProgressBar, EmptyState } from '@/components/ui';
+import { getNeighboringUnits, getKommuneNavn } from '@/lib/api/kartverket';
 import type { Neighbor, Project } from '@/lib/types';
 
 export default function ProsjektDetailPage() {
@@ -42,6 +44,8 @@ export default function ProsjektDetailPage() {
 
   const [activeTab, setActiveTab] = useState<'overview' | 'neighbors' | 'documents'>('overview');
   const [showAddNeighbor, setShowAddNeighbor] = useState(false);
+  const [fetchingNeighbors, setFetchingNeighbors] = useState(false);
+  const [fetchResult, setFetchResult] = useState<string | null>(null);
 
   useEffect(() => {
     hydrate();
@@ -86,6 +90,72 @@ export default function ProsjektDetailPage() {
     }
 
     updateProject(projectId, { status: 'sent' });
+  }
+
+  async function handleFetchNeighbors() {
+    if (!project?.kommune_nr || !project?.gnr || !project?.bnr) {
+      setFetchResult('Mangler kommune/gnr/bnr for eiendommen.');
+      return;
+    }
+
+    setFetchingNeighbors(true);
+    setFetchResult(null);
+
+    try {
+      const units = await getNeighboringUnits(
+        project.kommune_nr,
+        project.gnr,
+        project.bnr,
+        project.fnr ?? undefined,
+        150 // 150m radius
+      );
+
+      if (units.length === 0) {
+        setFetchResult('Fant ingen naboeiendommer i nærheten.');
+        setFetchingNeighbors(false);
+        return;
+      }
+
+      // Check for duplicates already in the neighbor list
+      const existingKeys = new Set(
+        projectNeighbors.map((n) => `${n.kommune_nr}-${n.gnr}-${n.bnr}`)
+      );
+
+      let added = 0;
+      for (const unit of units) {
+        const key = `${unit.kommune_nr}-${unit.gnr}-${unit.bnr}`;
+        if (existingKeys.has(key)) continue;
+
+        const neighbor: Neighbor = {
+          id: crypto.randomUUID(),
+          project_id: projectId,
+          gnr: unit.gnr,
+          bnr: unit.bnr,
+          fnr: unit.fnr,
+          kommune_nr: unit.kommune_nr,
+          address: unit.address,
+          relation_type: 'neighbor',
+          distance_meters: unit.distance_meters,
+          notification_status: 'pending',
+          source: 'matrikkel',
+          raw_data: { ...unit } as Record<string, unknown>,
+          created_at: new Date().toISOString(),
+          updated_at: new Date().toISOString(),
+        };
+        addNeighbor(neighbor);
+        added++;
+      }
+
+      setFetchResult(
+        added > 0
+          ? `Fant ${units.length} eiendommer, la til ${added} nye naboer.`
+          : `Fant ${units.length} eiendommer, men alle var allerede lagt til.`
+      );
+    } catch {
+      setFetchResult('Feil ved henting av naboer. Prøv igjen.');
+    } finally {
+      setFetchingNeighbors(false);
+    }
   }
 
   function handleAddManualNeighbor(data: {
@@ -206,15 +276,29 @@ export default function ProsjektDetailPage() {
 
       {activeTab === 'neighbors' && (
         <div className="space-y-4">
-          <div className="flex justify-end">
+          <div className="flex items-center justify-between gap-2">
+            <button
+              onClick={handleFetchNeighbors}
+              disabled={fetchingNeighbors}
+              className="inline-flex items-center gap-2 rounded-lg bg-green-600 px-4 py-2 text-sm font-medium text-white hover:bg-green-700 disabled:opacity-50 transition-colors"
+            >
+              <MapPin className="h-4 w-4" />
+              {fetchingNeighbors ? 'Henter naboer...' : 'Hent naboer fra Kartverket'}
+            </button>
             <button
               onClick={() => setShowAddNeighbor(true)}
               className="inline-flex items-center gap-2 rounded-lg border border-gray-200 px-3 py-2 text-sm font-medium text-gray-700 hover:bg-gray-50 transition-colors"
             >
               <UserPlus className="h-4 w-4" />
-              Legg til nabo
+              Legg til manuelt
             </button>
           </div>
+
+          {fetchResult && (
+            <div className="rounded-lg bg-blue-50 border border-blue-200 p-3 text-sm text-blue-700">
+              {fetchResult}
+            </div>
+          )}
 
           {showAddNeighbor && (
             <AddNeighborForm
@@ -323,6 +407,9 @@ function NeighborCard({
             </div>
             <p className="mt-0.5 text-sm text-gray-500">
               {neighbor.address || `gnr ${neighbor.gnr} / bnr ${neighbor.bnr}`}
+              {neighbor.distance_meters != null && (
+                <span className="ml-2 text-xs text-gray-400">({neighbor.distance_meters} m)</span>
+              )}
             </p>
             {neighbor.org_number && (
               <p className="text-xs text-gray-400">Org.nr: {neighbor.org_number}</p>

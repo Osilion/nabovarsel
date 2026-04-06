@@ -137,6 +137,7 @@ export interface MatrikkelUnit {
   snr?: number;
   address?: string;
   coordinates?: { lat: number; lng: number };
+  distance_meters?: number;
 }
 
 export interface GrunnbokOwner {

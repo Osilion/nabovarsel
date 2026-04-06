@@ -6,7 +6,7 @@ import { ArrowLeft, Search, MapPin, Building2 } from 'lucide-react';
 import Link from 'next/link';
 import { useStore } from '@/lib/store';
 import { SectionCard } from '@/components/ui';
-import { searchAddress } from '@/lib/api/kartverket';
+import { searchAddress, getKommuneNavn } from '@/lib/api/kartverket';
 import type { MatrikkelUnit, Project } from '@/lib/types';
 
 export default function NyttProsjektPage() {
@@ -22,6 +22,7 @@ export default function NyttProsjektPage() {
   const [name, setName] = useState('');
   const [description, setDescription] = useState('');
   const [deadline, setDeadline] = useState('');
+  const [kommuneNavn, setKommuneNavn] = useState('');
 
   async function handleSearch() {
     if (!query.trim()) return;
@@ -36,10 +37,15 @@ export default function NyttProsjektPage() {
     }
   }
 
-  function handleSelect(unit: MatrikkelUnit) {
+  async function handleSelect(unit: MatrikkelUnit) {
     setSelected(unit);
     setName(`Nabovarsel – ${unit.address || `${unit.gnr}/${unit.bnr}`}`);
     setStep('details');
+    // Fetch kommune name in background
+    if (unit.kommune_nr) {
+      const kn = await getKommuneNavn(unit.kommune_nr);
+      if (kn) setKommuneNavn(kn);
+    }
   }
 
   function handleCreate() {
@@ -50,7 +56,7 @@ export default function NyttProsjektPage() {
       name: name || `Nabovarsel ${selected.gnr}/${selected.bnr}`,
       description,
       kommune_nr: selected.kommune_nr,
-      kommune_navn: '',
+      kommune_navn: kommuneNavn,
       gnr: selected.gnr,
       bnr: selected.bnr,
       fnr: selected.fnr,
