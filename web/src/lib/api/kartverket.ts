@@ -39,13 +39,14 @@ interface PropertyFeature {
   snr?: number;
   polygon: Polygon;
   representasjonspunkt?: { lat: number; lng: number };
+  meterFraPunkt?: number;
 }
 
 // ---------- Property Lookup via Eiendom API ----------
 
 /**
- * Get coordinates and area for a specific matrikkel unit.
- * Uses Kartverket's geokoding endpoint.
+ * Get coordinates for a specific matrikkel unit.
+ * Uses Kartverket's geokoding endpoint (Point geometry).
  */
 export async function getPropertyGeometry(
   kommuneNr: string,
@@ -53,7 +54,7 @@ export async function getPropertyGeometry(
   bnr: number,
   fnr?: number,
   snr?: number
-): Promise<{ lat: number; lng: number; area_m2?: number } | null> {
+): Promise<{ lat: number; lng: number } | null> {
   try {
     let url = `${EIENDOM_API}/geokoding?kommunenummer=${kommuneNr}&gardsnummer=${gnr}&bruksnummer=${bnr}`;
     if (fnr) url += `&festenummer=${fnr}`;
@@ -63,16 +64,13 @@ export async function getPropertyGeometry(
     if (!res.ok) return null;
     const data = await res.json();
 
-    // GeoJSON FeatureCollection response
+    // Response is a GeoJSON FeatureCollection with Point geometry
     const feature = data?.features?.[0];
-    const repPunkt = feature?.properties?.representasjonspunkt;
-    if (!repPunkt) return null;
+    const coords = feature?.geometry?.coordinates;
+    if (!coords) return null;
 
-    return {
-      lat: repPunkt.nord,
-      lng: repPunkt.øst,
-      area_m2: feature?.properties?.areal,
-    };
+    // Point coordinates: [lng, lat]
+    return { lat: coords[1], lng: coords[0] };
   } catch {
     return null;
   }
@@ -99,15 +97,17 @@ async function getPropertyPolygon(
     if (!feature?.geometry?.coordinates) return null;
 
     const props = feature.properties ?? {};
+    
+    // Get the point coordinates for center
+    const pointGeo = await getPropertyGeometry(kommuneNr, gnr, bnr, fnr);
+
     return {
       kommune_nr: String(props.kommunenummer ?? kommuneNr),
       gnr: Number(props.gardsnummer ?? gnr),
       bnr: Number(props.bruksnummer ?? bnr),
       fnr: props.festenummer ? Number(props.festenummer) : undefined,
       polygon: feature.geometry.coordinates as Polygon,
-      representasjonspunkt: props.representasjonspunkt
-        ? { lat: props.representasjonspunkt.nord, lng: props.representasjonspunkt.øst }
-        : undefined,
+      representasjonspunkt: pointGeo ?? undefined,
     };
   } catch {
     return null;
@@ -132,22 +132,26 @@ async function getNearbyPropertyPolygons(
     return (data?.features ?? [])
       .filter((f: Record<string, unknown>) => {
         const geom = f.geometry as Record<string, unknown> | undefined;
-        return geom?.coordinates;
+        return geom?.coordinates && geom?.type === 'Polygon';
       })
       .map((f: Record<string, unknown>) => {
         const props = (f.properties ?? {}) as Record<string, unknown>;
         const geom = f.geometry as Record<string, unknown>;
-        const repPunkt = props.representasjonspunkt as Record<string, number> | undefined;
+        const coordinates = geom.coordinates as Polygon;
+        
+        // Calculate centroid from polygon for distance
+        const ring = coordinates[0];
+        const centroid = ring && ring.length > 0 ? getPolygonCentroid(ring) : undefined;
+
         return {
           kommune_nr: String(props.kommunenummer ?? ''),
           gnr: Number(props.gardsnummer ?? 0),
           bnr: Number(props.bruksnummer ?? 0),
           fnr: props.festenummer ? Number(props.festenummer) : undefined,
           snr: props.seksjonsnummer ? Number(props.seksjonsnummer) : undefined,
-          polygon: geom.coordinates as Polygon,
-          representasjonspunkt: repPunkt
-            ? { lat: repPunkt.nord, lng: repPunkt.øst }
-            : undefined,
+          polygon: coordinates,
+          representasjonspunkt: centroid,
+          meterFraPunkt: Number(props.meterFraPunkt ?? 0),
         };
       });
   } catch {
@@ -170,6 +174,7 @@ export async function getPropertiesNearPoint(
     if (!res.ok) return [];
     const data = await res.json();
 
+    // Response has .eiendom array with Point features
     return (data?.eiendom ?? []).map((e: Record<string, unknown>) => {
       const repPunkt = e.representasjonspunkt as Record<string, number> | undefined;
       return {
@@ -361,6 +366,20 @@ export async function lookupProperty(
 }
 
 // ---------- Helpers ----------
+
+/**
+ * Calculate centroid of a polygon ring.
+ */
+function getPolygonCentroid(ring: Ring): { lat: number; lng: number } {
+  let sumLat = 0;
+  let sumLng = 0;
+  const n = ring.length;
+  for (const [lng, lat] of ring) {
+    sumLat += lat;
+    sumLng += lng;
+  }
+  return { lat: sumLat / n, lng: sumLng / n };
+}
 
 function mapAddressToUnit(a: Record<string, unknown>): MatrikkelUnit {
   return {
