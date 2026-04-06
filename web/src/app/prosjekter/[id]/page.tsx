@@ -107,11 +107,10 @@ export default function ProsjektDetailPage() {
         project.gnr,
         project.bnr,
         project.fnr ?? undefined,
-        150 // 150m radius
       );
 
       if (units.length === 0) {
-        setFetchResult('Fant ingen naboeiendommer i nærheten.');
+        setFetchResult('Fant ingen tilgrensende eiendommer.');
         setFetchingNeighbors(false);
         return;
       }
@@ -148,8 +147,8 @@ export default function ProsjektDetailPage() {
 
       setFetchResult(
         added > 0
-          ? `Fant ${units.length} eiendommer, la til ${added} nye naboer.`
-          : `Fant ${units.length} eiendommer, men alle var allerede lagt til.`
+          ? `Fant ${units.length} tilgrensende eiendommer, la til ${added} nye naboer.`
+          : `Fant ${units.length} tilgrensende eiendommer, men alle var allerede lagt til.`
       );
     } catch {
       setFetchResult('Feil ved henting av naboer. Prøv igjen.');

@@ -25,6 +25,22 @@ export async function searchAddress(query: string): Promise<MatrikkelUnit[]> {
   }
 }
 
+// ---------- Polygon-based types ----------
+
+type Coord = [number, number]; // [lng, lat]
+type Ring = Coord[];
+type Polygon = Ring[]; // outer ring + optional holes
+
+interface PropertyFeature {
+  kommune_nr: string;
+  gnr: number;
+  bnr: number;
+  fnr?: number;
+  snr?: number;
+  polygon: Polygon;
+  representasjonspunkt?: { lat: number; lng: number };
+}
+
 // ---------- Property Lookup via Eiendom API ----------
 
 /**
@@ -47,13 +63,15 @@ export async function getPropertyGeometry(
     if (!res.ok) return null;
     const data = await res.json();
 
-    const coords = data?.representasjonspunkt;
-    if (!coords) return null;
+    // GeoJSON FeatureCollection response
+    const feature = data?.features?.[0];
+    const repPunkt = feature?.properties?.representasjonspunkt;
+    if (!repPunkt) return null;
 
     return {
-      lat: coords.lat,
-      lng: coords.lon,
-      area_m2: data?.bruksareal ?? data?.areal,
+      lat: repPunkt.nord,
+      lng: repPunkt.øst,
+      area_m2: feature?.properties?.areal,
     };
   } catch {
     return null;
@@ -61,9 +79,84 @@ export async function getPropertyGeometry(
 }
 
 /**
- * Find all properties near a geographic point.
- * Returns matrikkel units within a given radius.
- * This is the key API for neighbor discovery.
+ * Get the polygon boundary for a property.
+ */
+async function getPropertyPolygon(
+  kommuneNr: string,
+  gnr: number,
+  bnr: number,
+  fnr?: number,
+): Promise<PropertyFeature | null> {
+  try {
+    let url = `${EIENDOM_API}/geokoding?omrade=true&kommunenummer=${kommuneNr}&gardsnummer=${gnr}&bruksnummer=${bnr}`;
+    if (fnr) url += `&festenummer=${fnr}`;
+
+    const res = await fetch(url);
+    if (!res.ok) return null;
+    const data = await res.json();
+
+    const feature = data?.features?.[0];
+    if (!feature?.geometry?.coordinates) return null;
+
+    const props = feature.properties ?? {};
+    return {
+      kommune_nr: String(props.kommunenummer ?? kommuneNr),
+      gnr: Number(props.gardsnummer ?? gnr),
+      bnr: Number(props.bruksnummer ?? bnr),
+      fnr: props.festenummer ? Number(props.festenummer) : undefined,
+      polygon: feature.geometry.coordinates as Polygon,
+      representasjonspunkt: props.representasjonspunkt
+        ? { lat: props.representasjonspunkt.nord, lng: props.representasjonspunkt.øst }
+        : undefined,
+    };
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Get nearby property polygons using the /punkt/omrader endpoint.
+ */
+async function getNearbyPropertyPolygons(
+  lat: number,
+  lng: number,
+  radius: number = 200,
+): Promise<PropertyFeature[]> {
+  try {
+    const res = await fetch(
+      `${EIENDOM_API}/punkt/omrader?nord=${lat}&ost=${lng}&koordsys=4258&radius=${radius}&maksTreff=100`
+    );
+    if (!res.ok) return [];
+    const data = await res.json();
+
+    return (data?.features ?? [])
+      .filter((f: Record<string, unknown>) => {
+        const geom = f.geometry as Record<string, unknown> | undefined;
+        return geom?.coordinates;
+      })
+      .map((f: Record<string, unknown>) => {
+        const props = (f.properties ?? {}) as Record<string, unknown>;
+        const geom = f.geometry as Record<string, unknown>;
+        const repPunkt = props.representasjonspunkt as Record<string, number> | undefined;
+        return {
+          kommune_nr: String(props.kommunenummer ?? ''),
+          gnr: Number(props.gardsnummer ?? 0),
+          bnr: Number(props.bruksnummer ?? 0),
+          fnr: props.festenummer ? Number(props.festenummer) : undefined,
+          snr: props.seksjonsnummer ? Number(props.seksjonsnummer) : undefined,
+          polygon: geom.coordinates as Polygon,
+          representasjonspunkt: repPunkt
+            ? { lat: repPunkt.nord, lng: repPunkt.øst }
+            : undefined,
+        };
+      });
+  } catch {
+    return [];
+  }
+}
+
+/**
+ * Find all properties near a geographic point (simple list, no polygons).
  */
 export async function getPropertiesNearPoint(
   lat: number,
@@ -72,91 +165,111 @@ export async function getPropertiesNearPoint(
 ): Promise<MatrikkelUnit[]> {
   try {
     const res = await fetch(
-      `${EIENDOM_API}/punkt?lat=${lat}&lon=${lng}&radius=${radius}&crs=4326`
+      `${EIENDOM_API}/punkt?nord=${lat}&ost=${lng}&koordsys=4258&radius=${radius}&treffPerSide=50`
     );
     if (!res.ok) return [];
     const data = await res.json();
 
-    return (data?.eiendommer ?? []).map((e: Record<string, unknown>) => ({
-      kommune_nr: String(e.kommunenummer ?? ''),
-      gnr: Number(e.gardsnummer ?? 0),
-      bnr: Number(e.bruksnummer ?? 0),
-      fnr: e.festenummer ? Number(e.festenummer) : undefined,
-      snr: e.seksjonsnummer ? Number(e.seksjonsnummer) : undefined,
-      address: undefined, // Eiendom API doesn't return addresses
-      coordinates: e.representasjonspunkt
-        ? {
-            lat: (e.representasjonspunkt as Record<string, number>).lat,
-            lng: (e.representasjonspunkt as Record<string, number>).lon,
-          }
-        : undefined,
-    }));
+    return (data?.eiendom ?? []).map((e: Record<string, unknown>) => {
+      const repPunkt = e.representasjonspunkt as Record<string, number> | undefined;
+      return {
+        kommune_nr: String(e.kommunenummer ?? ''),
+        gnr: Number(e.gardsnummer ?? 0),
+        bnr: Number(e.bruksnummer ?? 0),
+        fnr: e.festenummer ? Number(e.festenummer) : undefined,
+        snr: e.seksjonsnummer ? Number(e.seksjonsnummer) : undefined,
+        address: undefined,
+        coordinates: repPunkt
+          ? { lat: repPunkt.nord, lng: repPunkt.øst }
+          : undefined,
+      };
+    });
   } catch {
     return [];
   }
 }
 
-// ---------- Neighbor Discovery (full pipeline) ----------
+// ---------- Neighbor Discovery (polygon adjacency) ----------
 
 /**
- * Find actual neighboring properties for a matrikkel unit.
+ * Find actual adjacent/bordering properties for a matrikkel unit.
  *
- * Pipeline:
- * 1. Look up source property coordinates via geokoding
- * 2. Search for properties near that point (radius search)
- * 3. Filter out the source property itself
- * 4. Enrich each neighbor with address data
- * 5. Calculate distance from source property
+ * Strategy:
+ * 1. Get source property polygon via /geokoding?omrade=true
+ * 2. Get all nearby property polygons via /punkt/omrader
+ * 3. Check polygon adjacency – only properties whose boundary
+ *    is within ~5m of the source boundary are true neighbors
+ * 4. Enrich with addresses and distance
  */
 export async function getNeighboringUnits(
   kommuneNr: string,
   gnr: number,
   bnr: number,
   fnr?: number,
-  radiusMeters: number = 100
 ): Promise<MatrikkelUnit[]> {
-  // Step 1: Get source property coordinates
-  const source = await getPropertyGeometry(kommuneNr, gnr, bnr, fnr);
-  if (!source) {
-    // Fallback: try address-based lookup
+  // Step 1: Get source property polygon
+  const sourcePoly = await getPropertyPolygon(kommuneNr, gnr, bnr, fnr);
+
+  if (!sourcePoly?.polygon || !sourcePoly.representasjonspunkt) {
+    // Fallback if polygon unavailable
     return getNeighborsByAddress(kommuneNr, gnr, bnr);
   }
 
-  // Step 2: Find properties near the source
-  const nearby = await getPropertiesNearPoint(source.lat, source.lng, radiusMeters);
+  const sourceCenter = sourcePoly.representasjonspunkt;
 
-  // Step 3: Filter out the source property
-  const neighbors = nearby.filter(
-    (u) =>
-      !(u.kommune_nr === kommuneNr && u.gnr === gnr && u.bnr === bnr && u.fnr === fnr)
+  // Step 2: Get nearby property polygons (200m radius to catch all adjacent)
+  const nearbyPolygons = await getNearbyPropertyPolygons(
+    sourceCenter.lat,
+    sourceCenter.lng,
+    200
   );
 
-  // Step 4: Deduplicate by gnr/bnr (ignore seksjoner of same eiendom)
+  // Step 3: Filter – exclude source property, deduplicate by gnr/bnr
   const seen = new Set<string>();
-  const unique = neighbors.filter((u) => {
-    const key = `${u.kommune_nr}-${u.gnr}-${u.bnr}`;
+  const sourceKey = `${kommuneNr}-${gnr}-${bnr}`;
+  seen.add(sourceKey);
+
+  const candidates = nearbyPolygons.filter((p) => {
+    const key = `${p.kommune_nr}-${p.gnr}-${p.bnr}`;
     if (seen.has(key)) return false;
     seen.add(key);
     return true;
   });
 
-  // Step 5: Enrich with addresses and distances
+  // Step 4: Check adjacency – polygon boundaries within 5m of each other
+  const ADJACENCY_THRESHOLD_M = 5;
+  const sourceRing = sourcePoly.polygon[0]; // outer ring
+
+  const adjacent = candidates.filter((candidate) => {
+    const candidateRing = candidate.polygon[0];
+    if (!candidateRing || !sourceRing) return false;
+    return polygonsAreAdjacent(sourceRing, candidateRing, ADJACENCY_THRESHOLD_M);
+  });
+
+  // Step 5: Enrich with addresses and distance from center
   const enriched = await Promise.all(
-    unique.map(async (unit) => {
+    adjacent.map(async (unit) => {
       const address = await getAddressForProperty(unit.kommune_nr, unit.gnr, unit.bnr);
-      const distance = unit.coordinates
-        ? haversineDistance(source.lat, source.lng, unit.coordinates.lat, unit.coordinates.lng)
+      const distance = unit.representasjonspunkt
+        ? haversineDistance(
+            sourceCenter.lat, sourceCenter.lng,
+            unit.representasjonspunkt.lat, unit.representasjonspunkt.lng
+          )
         : undefined;
 
       return {
-        ...unit,
-        address: address ?? unit.address,
+        kommune_nr: unit.kommune_nr,
+        gnr: unit.gnr,
+        bnr: unit.bnr,
+        fnr: unit.fnr,
+        snr: unit.snr,
+        address: address ?? undefined,
+        coordinates: unit.representasjonspunkt,
         distance_meters: distance ? Math.round(distance) : undefined,
-      };
+      } as MatrikkelUnit;
     })
   );
 
-  // Sort by distance
   return enriched.sort((a, b) => (a.distance_meters ?? 999) - (b.distance_meters ?? 999));
 }
 
@@ -283,4 +396,98 @@ function haversineDistance(
 
 function toRad(deg: number): number {
   return (deg * Math.PI) / 180;
+}
+
+// ---------- Polygon Adjacency ----------
+
+/**
+ * Check if two polygon rings are adjacent (share a boundary within threshold).
+ * Samples points along each ring and checks minimum distance.
+ */
+function polygonsAreAdjacent(
+  ringA: Ring,
+  ringB: Ring,
+  thresholdMeters: number
+): boolean {
+  // Sample points along ring A's edges
+  const pointsA = sampleRingPoints(ringA, 5); // sample every ~5m along edges
+
+  // For each sampled point on A, check distance to closest edge on B
+  for (const pt of pointsA) {
+    if (pointToRingDistance(pt, ringB) < thresholdMeters) {
+      return true;
+    }
+  }
+  return false;
+}
+
+/**
+ * Sample points along a polygon ring at approximately the given interval in meters.
+ */
+function sampleRingPoints(ring: Ring, intervalMeters: number): Coord[] {
+  const points: Coord[] = [];
+
+  for (let i = 0; i < ring.length - 1; i++) {
+    const a = ring[i];
+    const b = ring[i + 1];
+    const edgeLen = haversineDistance(a[1], a[0], b[1], b[0]);
+    const samples = Math.max(1, Math.ceil(edgeLen / intervalMeters));
+
+    for (let s = 0; s <= samples; s++) {
+      const t = s / samples;
+      points.push([
+        a[0] + t * (b[0] - a[0]),
+        a[1] + t * (b[1] - a[1]),
+      ]);
+    }
+  }
+
+  return points;
+}
+
+/**
+ * Minimum distance from a point to any edge of a polygon ring, in meters.
+ */
+function pointToRingDistance(pt: Coord, ring: Ring): number {
+  let minDist = Infinity;
+
+  for (let i = 0; i < ring.length - 1; i++) {
+    const a = ring[i];
+    const b = ring[i + 1];
+    const dist = pointToSegmentDistance(pt, a, b);
+    if (dist < minDist) minDist = dist;
+  }
+
+  return minDist;
+}
+
+/**
+ * Approximate distance from point P to line segment AB, in meters.
+ * Works in lat/lng by projecting to a local flat coordinate system.
+ */
+function pointToSegmentDistance(p: Coord, a: Coord, b: Coord): number {
+  // Convert to flat meters (approximate, good enough for small distances)
+  const cosLat = Math.cos(toRad(p[1]));
+  const mPerDegLat = 111320;
+  const mPerDegLng = 111320 * cosLat;
+
+  const px = (p[0] - a[0]) * mPerDegLng;
+  const py = (p[1] - a[1]) * mPerDegLat;
+  const bx = (b[0] - a[0]) * mPerDegLng;
+  const by = (b[1] - a[1]) * mPerDegLat;
+
+  const lenSq = bx * bx + by * by;
+  if (lenSq === 0) {
+    // A and B are the same point
+    return Math.sqrt(px * px + py * py);
+  }
+
+  // Project P onto AB, clamped to [0,1]
+  const t = Math.max(0, Math.min(1, (px * bx + py * by) / lenSq));
+  const projX = t * bx;
+  const projY = t * by;
+
+  const dx = px - projX;
+  const dy = py - projY;
+  return Math.sqrt(dx * dx + dy * dy);
 }
