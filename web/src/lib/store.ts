@@ -15,6 +15,7 @@ interface NabovarselStore {
   neighbors: Neighbor[];
   currentProjectId: string | null;
   loading: boolean;
+  hydrated: boolean;
 
   // Computed
   currentProject: () => Project | undefined;
@@ -40,6 +41,7 @@ export const useStore = create<NabovarselStore>((set, get) => ({
   neighbors: [],
   currentProjectId: null,
   loading: false,
+  hydrated: false,
 
   currentProject: () => {
     const { projects, currentProjectId } = get();
@@ -102,12 +104,16 @@ export const useStore = create<NabovarselStore>((set, get) => ({
     })),
 
   hydrate: () => {
+    const { hydrated } = get();
+    if (hydrated) return;
     if (!isSupabaseConfigured()) {
       set({
         projects: MOCK_PROJECTS,
         neighbors: MOCK_NEIGHBORS,
+        hydrated: true,
       });
+    } else {
+      set({ hydrated: true });
     }
-    // When Supabase is configured, hydration happens from server
   },
 }));
